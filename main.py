@@ -8,10 +8,11 @@ from lib.agent import handle_incoming_message, run_research_pipeline
 import asyncio
 from apscheduler.schedulers.background import BackgroundScheduler
 from lib.stock_checker import get_stock_price
-from lib.sms import send_sms
+from lib.telegram import send_telegram_message, send_telegram_message_sync
 import sys
 import json
-from twilio.request_validator import RequestValidator
+from telegram import Update, Bot
+from telegram.error import TelegramError
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -19,48 +20,62 @@ load_dotenv()
 
 app = FastAPI()
 
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")  # Set this in your environment
-TARGET_PHONE_NUMBER = os.getenv("TARGET_PHONE_NUMBER")  # Set this in your environment
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "your_secret_token")
 
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # This should be your public Twilio webhook URL
-
-@app.post("/receive-message")
-async def receive_message(request: Request):
-  signature = request.headers.get("X-Twilio-Signature", "")
-  form = await request.form()
-  validator = RequestValidator(TWILIO_AUTH_TOKEN)
-  params = dict(form)
-  # Use WEBHOOK_URL for validation, not request.url
-  if not validator.validate(WEBHOOK_URL, params, signature):
-    return Response(content="Invalid signature", status_code=403)
-
-  from_number = form.get("From", "")
-  to_number = form.get("To", "")
-  body = form.get("Body", "")
-
-  if (to_number != os.getenv("TWILIO_PHONE_NUMBER")):
-    return Response(content="Unauthorized", status_code=403)
-
-  if (from_number != TARGET_PHONE_NUMBER):
-    return Response(content="Unauthorized", status_code=403)
-
-  # Get the body content and escape it
-  
-  safe_body = html.escape(body)
-
-  Response(content="OK", status_code=200)
-
-  # Process the message
-  
-  response_text = await handle_incoming_message(safe_body)
-
-  # Send the response back to the user
-
-  print(f"Response: {response_text}")
-
-  send_sms(response_text)
-
-  return 
+@app.post("/telegram-webhook")
+async def telegram_webhook(request: Request):
+    """Handle incoming Telegram messages"""
+    try:
+        # Verify webhook secret token if provided
+        telegram_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if TELEGRAM_WEBHOOK_SECRET and telegram_secret != TELEGRAM_WEBHOOK_SECRET:
+            print(f"Invalid webhook secret: {telegram_secret}")
+            return Response(content="Unauthorized", status_code=403)
+        
+        # Parse Telegram update
+        update_data = await request.json()
+        
+        # Create Update object
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        update = Update.de_json(update_data, bot)
+        
+        # Only process text messages from authorized user
+        if update.message and update.message.text:
+            chat_id = str(update.message.chat.id)
+            
+            # Verify it's from authorized chat
+            if chat_id != TELEGRAM_CHAT_ID:
+                print(f"Unauthorized chat ID: {chat_id}")
+                return Response(content="Unauthorized chat", status_code=403)
+            
+            message_text = update.message.text
+            
+            # Escape HTML in message
+            safe_message = html.escape(message_text)
+            
+            print(f"Received Telegram message: {safe_message}")
+            
+            # Process the message
+            response_text = await handle_incoming_message(safe_message)
+            
+            print(f"Response: {response_text}")
+            
+            # Send response back via Telegram
+            await send_telegram_message(response_text)
+            
+            return Response(content="OK", status_code=200)
+        else:
+            print("No text message found in update")
+            return Response(content="No message", status_code=200)
+            
+    except TelegramError as e:
+        print(f"Telegram error: {e}")
+        return Response(content="Telegram error", status_code=500)
+    except Exception as e:
+        print(f"Error processing Telegram webhook: {e}")
+        return Response(content="Error", status_code=500) 
 
 # For testing purposes only
 

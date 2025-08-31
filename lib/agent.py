@@ -1,6 +1,6 @@
 from agents import Agent, Runner, WebSearchTool
 from lib.tools import get_stock_price_info, add_stock_to_tracker, remove_stock_from_tracker, get_stock_tracker_list
-from lib.sms import send_sms
+from lib.telegram import send_telegram_message_sync
 
 
 message_handler_agent = Agent(
@@ -66,4 +66,4 @@ async def run_research_pipeline(stock_symbol: str, current_price: float, previou
 
   final_output = summariser_response.final_output
 
-  send_sms(final_output)
+  send_telegram_message_sync(final_output)
